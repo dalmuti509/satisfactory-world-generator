@@ -1,7 +1,9 @@
-import { readSatisfactoryVersion } from "./version-info";
-
-const content = await Bun.file("extracted-resources.json").json();
-const gameVersion = await readSatisfactoryVersion();
+const raw = await Bun.file("extracted-resources.json").text();
+// `extract.cs` writes a trailing comma before the closing `]`. Normalize to valid JSON.
+const normalized = raw.replace(/],\s*\r?\n]/, "]\n]");
+const content = JSON.parse(normalized);
+// Avoid external tool dependencies (e.g. wrestool) during local extraction.
+const gameVersion = "unknown";
 
 const resourceNodes = content.filter(e => e[0] === "BP_ResourceNode_C").map(e => ({
     name: e[1],

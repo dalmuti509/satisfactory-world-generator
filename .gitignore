@@ -4,3 +4,6 @@
 /scripts/extracted-resources.json
 /src/default-world.json
 /src/world-outline.json
+
+/scripts/bin
+/scripts/obj

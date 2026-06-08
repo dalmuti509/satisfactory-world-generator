@@ -1,4 +1,4 @@
-use std::{f32, ops::RangeInclusive};
+use std::{collections::HashMap, f32, ops::RangeInclusive};
 
 use egui::{Color32, PopupAnchor, Pos2, Shape, Stroke, epaint::CircleShape, vec2};
 use egui_plot::{
@@ -74,6 +74,9 @@ pub struct ResourceDisplay<'a> {
     view_options_highlight: Option<ViewOptionsTarget>,
     plot_highlight: bool,
     is_dark_mode: bool,
+
+    picker_enabled: bool,
+    constrained_nodes: &'a HashMap<String, crate::game::ResourceDescriptor>,
 }
 
 impl<'a> ResourceDisplay<'a> {
@@ -83,6 +86,8 @@ impl<'a> ResourceDisplay<'a> {
         view_options: &'a ViewOptions,
         highlight: Option<ViewOptionsTarget>,
         is_dark_mode: bool,
+        picker_enabled: bool,
+        constrained_nodes: &'a HashMap<String, crate::game::ResourceDescriptor>,
     ) -> Self {
         let name = match content {
             ResourceDisplayContent::ResourceNodes(resource, _)
@@ -101,6 +106,17 @@ impl<'a> ResourceDisplay<'a> {
             view_options_highlight: highlight,
             plot_highlight: false,
             is_dark_mode,
+
+            picker_enabled,
+            constrained_nodes,
+        }
+    }
+
+    fn faint_gray(is_dark_mode: bool) -> Color32 {
+        if is_dark_mode {
+            Color32::from_gray(60)
+        } else {
+            Color32::from_gray(200)
         }
     }
 
@@ -173,11 +189,12 @@ impl<'a> PlotItem for ResourceDisplay<'a> {
             ResourceDisplayContent::ResourceNodes(resource, nodes) => {
                 for node in nodes {
                     let target = ViewOptionsTarget::ResourceWithPurity(*resource, node.purity);
-                    if !self
+                    let visible = self
                         .view_options
                         .is_target_visible(target)
-                        .unwrap_or_default()
-                    {
+                        .unwrap_or_default();
+
+                    if !visible && !self.picker_enabled {
                         continue;
                     }
 
@@ -190,27 +207,49 @@ impl<'a> PlotItem for ResourceDisplay<'a> {
                         scale
                     };
 
+                    let marker_color = if let Some(assigned) =
+                        self.constrained_nodes.get(&node.name)
+                    {
+                        get_resource_color(*assigned, self.is_dark_mode)
+                    } else if !visible {
+                        Self::faint_gray(self.is_dark_mode)
+                    } else {
+                        color
+                    };
+
                     let center = transform.position_from_point(
                         &ResourceDisplayContent::convert_location(node.location),
                     );
+                    let radius = self.marker_base_size * scale;
+
                     Self::marker_shape(
                         get_purity_marker(node.purity),
                         center,
-                        self.marker_base_size * scale,
-                        color,
+                        radius,
+                        marker_color,
                         true,
                         shapes,
                     );
+
+                    if self.constrained_nodes.contains_key(&node.name) {
+                        shapes.push(Shape::Circle(CircleShape {
+                            center,
+                            radius: radius * 1.4,
+                            fill: Color32::TRANSPARENT,
+                            stroke: Stroke::new(2.0, marker_color),
+                        }));
+                    }
                 }
             }
 
             ResourceDisplayContent::FrackingNodes(resource, cores) => {
                 let target = ViewOptionsTarget::ResourceFrackingNodes(*resource);
-                if !self
+                let group_visible = self
                     .view_options
                     .is_target_visible(target)
-                    .unwrap_or_default()
-                {
+                    .unwrap_or_default();
+
+                if !group_visible && !self.picker_enabled {
                     return;
                 }
 
@@ -224,18 +263,42 @@ impl<'a> PlotItem for ResourceDisplay<'a> {
                 };
 
                 for core in cores {
+                    let core_color = if let Some(assigned) =
+                        self.constrained_nodes.get(&core.name)
+                    {
+                        get_resource_color(*assigned, self.is_dark_mode)
+                    } else if !group_visible {
+                        Self::faint_gray(self.is_dark_mode)
+                    } else {
+                        color
+                    };
+
                     let center = transform.position_from_point(
                         &ResourceDisplayContent::convert_location(core.location),
                     );
+                    let core_radius = 1.5 * self.marker_base_size * scale;
 
                     Self::marker_shape(
                         MarkerShape::Circle,
                         center,
-                        1.5 * self.marker_base_size * scale,
-                        color,
+                        core_radius,
+                        core_color,
                         false,
                         shapes,
                     );
+
+                    if self.constrained_nodes.contains_key(&core.name) {
+                        shapes.push(Shape::Circle(CircleShape {
+                            center,
+                            radius: core_radius * 1.3,
+                            fill: Color32::TRANSPARENT,
+                            stroke: Stroke::new(2.0, core_color),
+                        }));
+                    }
+
+                    if !group_visible && self.picker_enabled {
+                        continue;
+                    }
 
                     for satellite in &core.satellites {
                         let center = transform.position_from_point(

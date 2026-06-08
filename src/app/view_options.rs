@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use egui::{Checkbox, RichText};
 use egui_extras::{Column, TableBuilder};
-use egui_plot::PlotMemory;
 use strum::IntoEnumIterator;
 
 use crate::{
@@ -100,40 +99,6 @@ impl ViewOptions {
             ResourcePurity::Impure => 0,
             ResourcePurity::Normal => 1,
             ResourcePurity::Pure => 2,
-        }
-    }
-
-    /// create a list of hidden plot item ids for initializing the plot legend
-    /// this is used to sync the `ViewOptions` state to the plot widget
-    pub fn get_hidden_items(&self) -> HashSet<egui::Id> {
-        ResourceDescriptor::iter()
-            .filter(|&r| {
-                !self
-                    .is_target_visible(ViewOptionsTarget::Resource(r))
-                    .unwrap_or(true)
-            })
-            .map(|r| egui::Id::new(r.to_string()))
-            .chain((!self.geysers_visible).then(|| egui::Id::new("Geyser")))
-            .chain((!self.world_outline_visible).then(|| egui::Id::new("World Outline")))
-            .collect()
-    }
-
-    /// read `PlotMemory` and apply the changes
-    /// this is used to sync the plot widget state to the `ViewOptions`
-    pub fn apply_legend_interaction(&mut self, egui_context: &egui::Context, plot_id: egui::Id) {
-        let Some(mem) = PlotMemory::load(egui_context, plot_id) else {
-            return;
-        };
-
-        self.geysers_visible = !mem.hidden_items.contains(&egui::Id::new("Geyser"));
-        self.world_outline_visible = !mem.hidden_items.contains(&egui::Id::new("World Outline"));
-
-        for resource in ResourceDescriptor::iter() {
-            self.set_target_visible(
-                ViewOptionsTarget::Resource(resource),
-                !mem.hidden_items
-                    .contains(&egui::Id::new(resource.to_string())),
-            );
         }
     }
 

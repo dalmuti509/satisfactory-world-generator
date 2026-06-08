@@ -307,7 +307,7 @@ Remove legend-sync fields/methods from `ViewOptions` that are only used by the p
 
 ## Open Questions
 
-None — requirements captured. Ready for implementation review.
+None — requirements captured. Fast search randomization approved 2026-06-06.
 
 ---
 
@@ -328,6 +328,123 @@ None — requirements captured. Ready for implementation review.
 - Geyser / fracking-satellite picking (not resource-randomized at pickable granularity)
 - Exporting results to file
 - Server-side / precomputed seed database
+
+---
+
+## Planned: Fast Seed Search Randomization (2026-06-06)
+
+### Problem
+
+`seed_matches()` currently clones the full default `World` (~577 resource nodes + fracking + geysers) and calls `apply_randomization_settings()` for **every** candidate seed. That function:
+
+- Sorts all node lists
+- Builds and shuffles full resource + fracking pools
+- Assigns resources to **every** node
+- Applies purity overrides (even though constraints ignore purity)
+
+The **map viewer** should keep using `apply_randomization_settings()` unchanged so the displayed world stays identical to today.
+
+The **seed search path** (server parallel search + optional native fallback) should use a new function that produces the same resource assignments for constrained nodes, without building a full `World`.
+
+### Why we cannot skip the entire map
+
+Resource assignment is **sequential** and **order-dependent**:
+
+1. All resource nodes are sorted by stable `name`.
+2. A shared `node_pool` is built from default resources, optionally modified by mode (`BasicRich`, etc.), then shuffled.
+3. For each node in sort order: draw a random pool index → assign that resource → remove from pool.
+
+So the resource at node **N** depends on every pool draw **before** N in sorted order, not only on N itself. We **cannot** randomize constraint nodes in isolation without breaking correctness.
+
+Purity settings can also consume RNG between pool draws (e.g. `AllRandom`), which affects later pool indices even though constraints match **resource type only**.
+
+### Proposed fast path: `resolve_constrained_resources_for_search`
+
+New function in `src/randomization.rs` (name TBD), used **only** by seed search:
+
+```rust
+/// Returns resource type for each constrained node name, or checks constraints in one pass.
+pub fn seed_matches_fast(
+    template: &WorldTemplate,  // precomputed, read-only
+    seed: i32,
+    mode: NodeRandomizationMode,
+    purity: NodePuritySettings,
+    constraints: &[(node_name, PickableNodeKind, ResourceDescriptor)],
+) -> bool
+```
+
+**Same logic as today for correctness:**
+
+- Same `RandomStream`, same pool construction, same `modify_node_distribution`, same shuffle, same per-node pool draws.
+- Same `get_purity_override` calls when purity settings consume RNG (discard result; constraints ignore purity).
+- Same fracking pool + assignment when **any** constraint targets a fracking core.
+
+**Optimizations (safe):**
+
+| Skip | When |
+|------|------|
+| `World` clone | Always — operate on pre-sorted template slices + indices |
+| Geyser sorting / mutation | Always — geysers not in search |
+| Fracking block | No fracking-core constraints |
+| Satellite purity pass | Always for search (constraints are resource-only; fracking cores use `distribute_throughput`, not satellite purity, for `core.resource`) |
+| Resource loop after last constrained node | Once all **resource-node** constraints are assigned — stop early, check failures |
+| Writing purity / locations / full structs | Always — only compare `ResourceDescriptor` for constrained names |
+
+**Precomputed once per `SearchCacheKey`** (cached alongside search state):
+
+- Sorted resource node names + index into template
+- Sorted fracking core names + index
+- Default `ResourceNodeInfo` pools (from template, not cloned `World`)
+- Set of constrained names + max sort index for early exit
+- Flags: `needs_fracking_phase`, `needs_purity_rng` (any purity setting that calls `frand` during resource loop)
+
+### Call sites
+
+| Location | Before | After |
+|----------|--------|-------|
+| `src/seed_search.rs` → `seed_matches` | clone + `apply_randomization_settings` | `seed_matches_fast` + shared template |
+| `server/src/search.rs` | `seed_matches` | same fast path |
+| `src/app/ui.rs` / world display | `apply_randomization_settings` | **unchanged** |
+
+### Expected speedup
+
+- **Large:** no per-seed `World` clone/allocation.
+- **Medium:** early exit when constraints cover few nodes (stop after last constrained index in name order, skip fracking if unused).
+- **Small:** no geysers, no purity writes, no full struct updates.
+
+Still **O(all resource nodes)** worst case when a constrained node sorts last by name. Typical picks (few nodes, scattered) should be much faster.
+
+### Correctness requirement
+
+Add tests (or dev-only assertion) that for random seeds + constraint sets:
+
+```text
+seed_matches_fast(...) == seed_matches(...)  // legacy full-world path
+```
+
+Keep legacy `seed_matches` internally for tests; route production search through fast path only after parity verified.
+
+### Implementation phases
+
+1. [x] **`WorldSearchTemplate`** — build once from default world: sorted names, default pool entries, constraint index maps.
+2. [x] **`WorldSearchTemplate::seed_matches`** — fast RNG path with early exit.
+3. [x] **Wire `seed_matches`** to use template + fast path; legacy path kept in unit tests for parity.
+4. [x] **Server:** holds `Arc<WorldSearchTemplate>` instead of cloning `World` per seed check.
+5. [ ] **Benchmark:** seeds/sec before vs after on representative 1 / 3 / 10 constraint queries.
+
+### Decided (2026-06-06)
+
+| Topic | Decision |
+|-------|----------|
+| Viewer randomization | Keep `apply_randomization_settings` unchanged |
+| Search randomization | New fast path with early exit after last constrained node |
+| Purity in search | Still advance RNG when settings require it; never compare purity in constraints |
+| Fracking | Full fracking phase only if a fracking core is constrained |
+| Early exit | **Yes** — stop after last constrained resource node in name order; skip fracking if unused |
+
+### Open question
+
+None for fast search — ready to implement.
 
 ---
 

@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug)]
 pub enum GameplayTag {
@@ -7,7 +7,7 @@ pub enum GameplayTag {
     FossilFuel,
 }
 
-#[derive(PartialEq, Eq, Hash, Deserialize, Clone, Copy, Debug, strum::EnumIter, strum::Display)]
+#[derive(PartialEq, Eq, Hash, Deserialize, Serialize, Clone, Copy, Debug, strum::EnumIter, strum::Display)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum ResourceDescriptor {
     #[serde(rename = "Desc_OreIron_C")]

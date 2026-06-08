@@ -13,8 +13,7 @@ impl WorldOutline {
     pub fn new() -> Self {
         const WORLD_REGION: [[f64; 2]; 2] = [[-324698.16, -375000.0], [425301.8, 375000.0]];
 
-        let data: Vec<Vec<[f64; 2]>> =
-            serde_json::from_str(include_str!("../world-outline.json")).unwrap();
+        let data = load_outline_polylines(include_str!("../world-outline.json"));
         let data = data
             .into_iter()
             .map(|line| {
@@ -99,4 +98,26 @@ impl<'a> PlotItem for WorldOutlinePlotItem<'a> {
     fn allow_hover(&self) -> bool {
         false
     }
+}
+
+fn load_outline_polylines(json: &str) -> Vec<Vec<[f64; 2]>> {
+    if let Ok(points) = serde_json::from_str::<Vec<[f64; 2]>>(json) {
+        if points.len() >= 2 {
+            return vec![points];
+        }
+    }
+
+    let polylines: Vec<Vec<[f64; 2]>> = serde_json::from_str(json).unwrap_or_default();
+    if polylines.iter().all(|line| line.len() == 1) && polylines.len() >= 2 {
+        return polylines
+            .into_iter()
+            .map(|line| line[0])
+            .collect::<Vec<_>>()
+            .chunks(2)
+            .map(|pair| pair.to_vec())
+            .filter(|line| line.len() >= 2)
+            .collect();
+    }
+
+    polylines
 }

@@ -1,0 +1,5 @@
+target/
+dist/
+scripts/bin/
+scripts/obj/
+.git/

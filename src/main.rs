@@ -3,10 +3,10 @@
 use crate::app::run_app;
 
 mod app;
-mod game;
-mod random_stream;
-mod randomization;
-mod stats;
+
+pub use satisfactory_world_generator::{
+    game, random_stream, randomization, search_template, seed_search, stats,
+};
 
 fn main() {
     run_app().unwrap();

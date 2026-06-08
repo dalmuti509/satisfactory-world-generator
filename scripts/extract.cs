@@ -1,32 +1,39 @@
-using System.Diagnostics;
 using CUE4Parse.Compression;
 using CUE4Parse.FileProvider;
 using CUE4Parse.MappingsProvider;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Actor;
-using CUE4Parse.UE4.Assets.Exports.Component;
-using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.Engine;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
-using Newtonsoft.Json;
 
-const string directory = ".../steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/";
-const string mapping = ".../steam/steamapps/common/Satisfactory/CommunityResources/FactoryGame.usmap";
-const string levelPath = "FactoryGame/Content/FactoryGame/Map/GameLevel01/Persistent_Level.umap.PersistentLevel";
+const string rootDirectory = @"D:\SteamLibrary\steamapps\common\Satisfactory\";
+const string directory = rootDirectory + @"FactoryGame\Content\Paks\";
+const string levelPath =
+    "FactoryGame/Content/FactoryGame/Map/GameLevel01/Persistent_Level.umap.PersistentLevel";
 
-var oodlePath = Path.Combine(".", "liboo2corelinux64.so.9");
-OodleHelper.Initialize(oodlePath);
+await OodleHelper.InitializeAsync(OodleHelper.OodleFileName);
+Console.Error.WriteLine(OodleHelper.Instance is null ? "Oodle: NOT loaded" : "Oodle: loaded");
 
-var provider = new DefaultFileProvider(directory, SearchOption.AllDirectories, new VersionContainer(EGame.GAME_UE5_6),
+var provider = new DefaultFileProvider(
+    directory,
+    SearchOption.AllDirectories,
+    new VersionContainer(EGame.GAME_UE5_6),
     StringComparer.Ordinal);
-// provider.MappingsContainer = new FileUsmapTypeMappingsProvider(mapping);
 provider.Initialize();
 provider.Mount();
 
+var levelCandidates = provider.Files.Keys
+    .Where(k => k.Contains("GameLevel01", StringComparison.OrdinalIgnoreCase) && k.EndsWith(".umap", StringComparison.OrdinalIgnoreCase))
+    .Take(30)
+    .ToList();
 
-// BP_ResourceNode_C, BP_FrackingSatellite_C, BP_FrackingCore_C, BP_ResourceNodeGeyser_C
+Console.Error.WriteLine($"Mounted files: {provider.Files.Count}");
+Console.Error.WriteLine("Level candidates:");
+foreach (var c in levelCandidates)
+    Console.Error.WriteLine($"  {c}");
+
 var level = provider.LoadPackageObject<ULevel>(levelPath);
 
 using var writer = new StreamWriter("extracted-resources.json");
@@ -83,4 +90,3 @@ foreach (var node in level.Actors.Select(a => a.Load()).Where(a => a is { Export
 }
 
 writer.WriteLine("]");
-

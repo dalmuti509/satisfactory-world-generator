@@ -8,7 +8,16 @@ use crate::{
 };
 
 #[derive(
-    PartialEq, Eq, Hash, Debug, Clone, Copy, Serialize, Deserialize, strum::EnumIter, strum::Display,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    strum::EnumIter,
+    strum::Display,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum NodeRandomizationMode {
@@ -25,7 +34,16 @@ pub enum NodeRandomizationMode {
 }
 
 #[derive(
-    Eq, PartialEq, Debug, Clone, Copy, Serialize, Deserialize, strum::EnumIter, strum::Display,
+    Eq,
+    PartialEq,
+    Hash,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    strum::EnumIter,
+    strum::Display,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum NodePuritySettings {

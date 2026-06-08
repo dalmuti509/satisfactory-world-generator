@@ -13,12 +13,19 @@ use crate::{
         constants::get_resource_color,
         outline::WorldOutline,
         plot_item::{ResourceDisplay, ResourceDisplayContent},
+        resource_picker::{self, ResourcePicker},
         view_options::ViewOptions,
     },
     game::{ResourceDescriptor, World},
     randomization::{NodePuritySettings, NodeRandomizationMode, apply_randomization_settings},
+    seed_search::SearchCacheKey,
     stats::Stats,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::seed_search::SeedSearchState;
+#[cfg(target_arch = "wasm32")]
+use crate::app::seed_search_client::RemoteSeedSearch;
 
 #[derive(Serialize, Deserialize)]
 struct QueryParams {
@@ -50,6 +57,13 @@ pub struct App {
     view_options: ViewOptions,
 
     outline: WorldOutline,
+
+    resource_picker: ResourcePicker,
+    #[cfg(not(target_arch = "wasm32"))]
+    seed_search: SeedSearchState,
+    #[cfg(target_arch = "wasm32")]
+    seed_search: RemoteSeedSearch,
+    last_search_key: Option<SearchCacheKey>,
 }
 
 impl Default for App {
@@ -69,6 +83,13 @@ impl Default for App {
             view_options: ViewOptions::new(),
 
             outline: WorldOutline::new(),
+
+            resource_picker: ResourcePicker::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            seed_search: SeedSearchState::new(Self::default_world_template()),
+            #[cfg(target_arch = "wasm32")]
+            seed_search: RemoteSeedSearch::new(),
+            last_search_key: None,
         }
     }
 }
@@ -133,6 +154,72 @@ impl App {
     #[cfg(target_arch = "wasm32")]
     fn get_elapsed_duration(start_time: f64) -> Duration {
         Duration::from_secs_f64((Self::get_time() - start_time) / 1000.0)
+    }
+
+    fn default_world_template() -> World {
+        serde_json::from_str(include_str!("../default-world.json")).unwrap()
+    }
+
+    fn picker_enabled(&self) -> bool {
+        ResourcePicker::is_enabled(self.randomization_mode)
+    }
+
+    fn sync_seed_search(&mut self, ctx: &egui::Context) {
+        if !self.picker_enabled() {
+            self.resource_picker.clear();
+            self.seed_search.clear();
+            self.last_search_key = None;
+            return;
+        }
+
+        let key = SearchCacheKey::new(
+            &self.resource_picker.constraints_vec(),
+            self.randomization_mode,
+            self.purity_settings,
+        );
+
+        if self.last_search_key.as_ref() == Some(&key) {
+            return;
+        }
+
+        let prior_matches = self.seed_search.matches.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.seed_search.on_settings_changed(key.clone(), &prior_matches);
+        #[cfg(target_arch = "wasm32")]
+        {
+            let constraints = self.resource_picker.constraints_vec();
+            self.seed_search
+                .on_settings_changed(key.clone(), &prior_matches, &constraints, ctx);
+        }
+        self.last_search_key = Some(key);
+    }
+
+    fn seed_results_ui(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Seed Search Results");
+
+        if !self.picker_enabled() {
+            ui.label(self.seed_search.status_text());
+            return;
+        }
+
+        if self.resource_picker.constraints_vec().is_empty() {
+            ui.label(self.seed_search.status_text());
+            return;
+        }
+
+        ui.label(self.seed_search.status_text());
+
+        let matches = self.seed_search.matches.clone();
+        egui::ScrollArea::vertical()
+            .max_height(ui.available_height() - 24.0)
+            .show(ui, |ui| {
+                for seed in matches {
+                    if ui.selectable_label(false, seed.to_string()).clicked() {
+                        self.seed = Some(seed);
+                        self.world = None;
+                    }
+                }
+            });
     }
 
     fn stats_ui(&self, ui: &mut egui::Ui) {
@@ -214,8 +301,9 @@ impl eframe::App for App {
                     .min_size(200.0)
                     .default_size(380.0)
                     .show_inside(ui, |ui| {
-                        ui.take_available_space();
+                        self.seed_results_ui(ui);
                         ui.add_space(5.0);
+                        ui.separator();
 
                         ui.horizontal(|ui| {
                             SidePanel::iter().for_each(|v| {
@@ -296,6 +384,11 @@ impl eframe::App for App {
                                                 .changed()
                                             {
                                                 self.world = None;
+                                                self.last_search_key = None;
+                                                if m == NodeRandomizationMode::None {
+                                                    self.resource_picker.clear();
+                                                    self.seed_search.clear();
+                                                }
                                             }
                                         });
                                     });
@@ -315,6 +408,7 @@ impl eframe::App for App {
                                                 .changed()
                                             {
                                                 self.world = None;
+                                                self.last_search_key = None;
                                             }
                                         });
                                     });
@@ -335,6 +429,25 @@ impl eframe::App for App {
                     }
                 });
             });
+
+        // Seed-search state is independent of the generated world, so we update it
+        // before borrowing `self.world` below.
+        self.sync_seed_search(ui.ctx());
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.seed_search.poll(ui.ctx());
+            if self.seed_search.searching {
+                ui.ctx().request_repaint();
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.seed_search.searching {
+            self.seed_search.step();
+        }
+
+        let picker_enabled = self.picker_enabled();
+        // Clone to avoid borrow conflicts: the UI closure may mutate `self.resource_picker`.
+        let constrained_nodes = self.resource_picker.constraint_resources().clone();
 
         let world = self.world.get_or_insert_with(|| {
             let start_time = Self::get_time();
@@ -372,9 +485,6 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
             let plot = egui_plot::Plot::new("main_display_plot")
-                .legend(
-                    egui_plot::Legend::default().hidden_items(self.view_options.get_hidden_items()),
-                )
                 .show_axes(true)
                 .show_grid(true)
                 .data_aspect(1.0)
@@ -383,7 +493,7 @@ impl eframe::App for App {
 
             let is_dark_mode = ui.visuals().dark_mode;
 
-            plot.show(ui, |plot_ui| {
+            let plot_response = plot.show(ui, |plot_ui| {
                 plot_ui.add(self.outline.plot_item());
 
                 let test_rect = plot_ui
@@ -400,6 +510,8 @@ impl eframe::App for App {
                         &self.view_options,
                         view_options_highlight,
                         is_dark_mode,
+                        picker_enabled,
+                        &constrained_nodes,
                     ));
                 }
 
@@ -411,6 +523,8 @@ impl eframe::App for App {
                         &self.view_options,
                         view_options_highlight,
                         is_dark_mode,
+                        picker_enabled,
+                        &constrained_nodes,
                     ));
                 }
 
@@ -421,10 +535,44 @@ impl eframe::App for App {
                     &self.view_options,
                     view_options_highlight,
                     is_dark_mode,
+                    picker_enabled,
+                    &constrained_nodes,
                 ));
             });
 
-            self.view_options.apply_legend_interaction(ui, self.plot_id);
+            let mut picker_changed = self
+                .resource_picker
+                .map_overlay_ui(ui, picker_enabled);
+
+            if picker_enabled && plot_response.response.clicked() {
+                if let Some(pointer) = plot_response.response.interact_pointer_pos() {
+                    let test_rect = plot_response.transform.rect_from_values(
+                        &PlotPoint::new(0.0, 0.0),
+                        &PlotPoint::new(1.0, 1.0),
+                    );
+                    let scale = (test_rect.width() + test_rect.height()) / 2.0;
+                    let hit_base_size = (5000.0 * scale).clamp(5.0, 20.0);
+
+                    let pickable_hits =
+                        resource_picker::collect_pickable_hits(world, hit_base_size);
+                    if let Some(hit) = resource_picker::find_pickable_hit(
+                        &pickable_hits,
+                        pointer,
+                        &plot_response.transform,
+                    ) {
+                        self.resource_picker.toggle_node(
+                            hit.name.clone(),
+                            hit.kind,
+                            hit.location,
+                        );
+                        picker_changed = true;
+                    }
+                }
+            }
+
+            if picker_changed {
+                self.last_search_key = None;
+            }
         });
     }
 }
